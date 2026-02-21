@@ -39,35 +39,29 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or len(df) < 200:
         return df
     df.columns = [c.lower() for c in df.columns]
+
+    df["log_return"] = np.log(df["close"] / df["close"].shift(1))
     
-    close: pd.Series = df["close"]  # type: ignore[assignment]
-    high: pd.Series = df["high"]    # type: ignore[assignment]
-    low: pd.Series = df["low"]      # type: ignore[assignment]
-    volume: pd.Series = df["volume"] # type: ignore[assignment]
+    df["rsi_14"] = df.ta.rsi(length=14)
+    df["roc_10"] = df.ta.roc(length=10)
+    df["atr_14"] = df.ta.atr(length=14)
+    df["mfi_14"] = df.ta.mfi(length=14)
 
-    df["log_return"] = np.log(close / close.shift(1))
-    df["rsi_14"] = ta.rsi(close, length=14)
-    df["roc_10"] = ta.roc(close, length=10)
-
-    macd = ta.macd(close, fast=12, slow=26, signal=9)
+    macd = df.ta.macd(fast=12, slow=26, signal=9)
     if macd is not None:
-        df["macd"] = macd["MACD_12_26_9"]
-        df["macd_signal"] = macd["MACDs_12_26_9"]
-        df["macd_hist"] = macd["MACDh_12_26_9"]
+        df["macd"] = macd.iloc[:, 0]
+        df["macd_signal"] = macd.iloc[:, 2]
+        df["macd_hist"] = macd.iloc[:, 1]
 
-    df["atr_14"] = ta.atr(high, low, close, length=14)
-    
-    bb = ta.bbands(close, length=20, lower_std=2, upper_std=2)
+    bb = df.ta.bbands(length=20, std=2)
     if bb is not None:
-        l_col = [c for c in bb.columns if c.startswith("BBL")][0]
-        u_col = [c for c in bb.columns if c.startswith("BBU")][0]
-        df["bb_percent"] = (close - bb[l_col]) / (bb[u_col] - bb[l_col])
+        l_col = bb.iloc[:, 0]
+        u_col = bb.iloc[:, 2]
+        df["bb_percent"] = (df["close"] - l_col) / (u_col - l_col)
 
-    ema_200 = ta.ema(close, length=200)
+    ema_200 = df.ta.ema(length=200)
     if ema_200 is not None:
-        df["dist_ema_200"] = (close - ema_200) / ema_200
-
-    df["mfi_14"] = ta.mfi(high, low, close, volume, length=14)
+        df["dist_ema_200"] = (df["close"] - ema_200) / ema_200
 
     return df.dropna()
 
