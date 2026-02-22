@@ -1,4 +1,5 @@
 import os
+from curl_cffi.requests import query
 import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text, MetaData
@@ -139,3 +140,41 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Error fetching latest date for {ticker}: {e}")
             return None
+
+    """
+    Methods for frontend data retrieval. NOT used in pipeline.
+    """
+    def fetch_available_tickers(self) -> list[str]:
+        if self.engine is None:
+            return []
+
+        query = text("SELECT DISTINCT ticker FROM market_data")
+
+        try:
+            with self.engine.connect() as conn:
+                res = pd.read_sql(query, conn)
+                return res["ticker"].tolist()
+        except Exception as e:
+            logger.error(f"Error fetching available tickers: {e}")
+            return []
+
+    def fetch_market_data(self, ticker: str) -> pd.DataFrame:
+        if self.engine is None:
+            return pd.DataFrame()
+        
+        query = text("""
+
+                SELECT date, ticker, open, high, low, close, volume 
+                FROM market_data
+                WHERE ticker = :ticker
+                ORDER BY date ASC
+            """)
+
+        try:
+            with self.engine.connect() as conn:
+                df = pd.read_sql(query, conn, params={"ticker": ticker})
+                df['date'] = pd.to_datetime(df['date'])
+                return df
+        except Exception as e:
+            logger.error(f"Error fetching market data: {e}")
+            return pd.DataFrame()
