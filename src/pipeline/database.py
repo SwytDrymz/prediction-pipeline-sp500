@@ -1,5 +1,5 @@
+from datetime import date
 import os
-from curl_cffi.requests import query
 import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text, MetaData
@@ -19,15 +19,20 @@ class DatabaseService:
             self.metadata = None
             return
 
-        self.engine = create_engine(db_url)
+        self.engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            pool_size=5,
+            max_overflow=10,
+        )
 
         self.metadata = MetaData()
+
         try:
             self.metadata.reflect(bind=self.engine)
             logger.info("Database metadata loaded successfully.")
         except Exception as e:
-            logger.error(f"Failed to load database metadata: {e}")
-            self.metadata = None
+            raise RuntimeError("DatabaseService initialization failed.") from e
 
     def save_market_data(self, df: pd.DataFrame, ticker: str):
         if self.engine is None or self.metadata is None or df.empty:
@@ -51,6 +56,27 @@ class DatabaseService:
             logger.debug(f"[{ticker}] Saved {len(records)} market data records.")
         except Exception as e:
             logger.error(f"[{ticker}] Failed to save market data: {e}")
+
+    def fetch_market_data(self, ticker: str) -> pd.DataFrame:
+        if self.engine is None:
+            return pd.DataFrame()
+
+        query = text("""
+
+                SELECT date, ticker, open, high, low, close, volume 
+                FROM market_data
+                WHERE ticker = :ticker
+                ORDER BY date ASC
+            """)
+
+        try:
+            with self.engine.connect() as conn:
+                df = pd.read_sql(query, conn, params={"ticker": ticker})
+                df["date"] = pd.to_datetime(df["date"])
+                return df
+        except Exception as e:
+            logger.error(f"Error fetching market data: {e}")
+            return pd.DataFrame()
 
     def save_prediction(self, record: dict, model_type: str):
         if self.engine is None or self.metadata is None:
@@ -96,7 +122,7 @@ class DatabaseService:
 
     def get_prediction_for_evaluation(
         self, ticker: str, model: str, target_date: str, model_type: str
-    ):
+    ) -> dict | None:
         if self.engine is None:
             return None
 
@@ -128,7 +154,7 @@ class DatabaseService:
             logger.error(f"Error fetching prediction for evaluation: {e}")
             return None
 
-    def get_latest_date(self, ticker: str):
+    def get_latest_date(self, ticker: str) -> date | None:
         if self.engine is None:
             return None
 
@@ -141,9 +167,8 @@ class DatabaseService:
             logger.error(f"Error fetching latest date for {ticker}: {e}")
             return None
 
-    """
-    Methods for frontend data retrieval. NOT used in pipeline.
-    """
+    # --- Methods for frontend data retrieval. NOT used in pipeline.
+
     def fetch_available_tickers(self) -> list[str]:
         if self.engine is None:
             return []
@@ -158,23 +183,32 @@ class DatabaseService:
             logger.error(f"Error fetching available tickers: {e}")
             return []
 
-    def fetch_market_data(self, ticker: str) -> pd.DataFrame:
+    def fetch_predictions_for_type(self, model_type: str) -> pd.DataFrame:
         if self.engine is None:
             return pd.DataFrame()
-        
-        query = text("""
 
-                SELECT date, ticker, open, high, low, close, volume 
-                FROM market_data
-                WHERE ticker = :ticker
-                ORDER BY date ASC
-            """)
-
+        table_name = f"predictions_{model_type}"
+        query = text(f"SELECT * FROM {table_name} ORDER BY prediction_date DESC")
         try:
             with self.engine.connect() as conn:
-                df = pd.read_sql(query, conn, params={"ticker": ticker})
-                df['date'] = pd.to_datetime(df['date'])
-                return df
+                return pd.read_sql(query, conn)
         except Exception as e:
-            logger.error(f"Error fetching market data: {e}")
+            logger.error(f"Error fetching predictions for {model_type}: {e}")
+            return pd.DataFrame()
+
+    def fetch_evaluations_for_type(self, model_type: str) -> pd.DataFrame:
+        if self.engine is None:
+            return pd.DataFrame()
+
+        ALLOWED_MODEL_TYPES = {"classification", "regression"}
+        if model_type not in ALLOWED_MODEL_TYPES:
+            raise ValueError(f"Invalid model_type: {model_type}.")
+
+        table_name = f"evaluations_{model_type}"
+        query = text(f"SELECT * FROM {table_name} ORDER BY evaluation_date DESC")
+        try:
+            with self.engine.connect() as conn:
+                return pd.read_sql(query, conn)
+        except Exception as e:
+            logger.error(f"Error fetching evaluations for {model_type}: {e}")
             return pd.DataFrame()

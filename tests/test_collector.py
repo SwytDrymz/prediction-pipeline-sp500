@@ -26,7 +26,7 @@ def test_add_features_success(sample_df):
     df_featured = add_features(input_df)
 
     assert "rsi_14" in df_featured.columns
-    assert "macd" in df_featured.columns
+    assert "macd_hist" in df_featured.columns
     assert "log_return" in df_featured.columns
     assert not df_featured.isnull().values.any()
 

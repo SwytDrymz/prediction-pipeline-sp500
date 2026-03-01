@@ -1,53 +1,210 @@
 import pandas as pd
 from sklearn.tree import DecisionTreeClassifier
-from src.models.base import BaseModel
+from src.models.base import BaseModel, prepare_features
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from sklearn.svm import SVC
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+
+from src.utils.logging_config import setup_logger
+
+logger = setup_logger(__name__)
 
 
 class DecisionTreeClassModel(BaseModel):
     def __init__(
-        self, max_depth: int = 5, criterion: str = "gini", threshold: float = 0.005
+        self,
+        features: list | None = None,
+        max_depth: int = 5,
+        criterion: str = "gini",
+        threshold: float = 0.005,
     ):
-        features = ["volume", "log_return", "rsi_14", "atr_14"]
+        features_to_init = features if features is not None else []
+
         params = {"max_depth": max_depth, "criterion": criterion}
+
         super().__init__(
-            "DecisionTreeClassifier",
-            "classification",
-            features,
-            params,
+            name="DecisionTreeClassifier",
+            model_type="classification",
+            features=features_to_init,
+            params=params,
             classification_threshold=threshold,
         )
 
     def train_predict_next(self, df: pd.DataFrame) -> dict:
-        lags = 10
-        df_features = self.create_lags(df, lags=lags)
+        if not self.features:
+            exclude = {"open", "high", "low", "close", "target"}
+            self.features = [c for c in df.columns if c.lower() not in exclude]
 
-        # Use the threshold from self
-        df_features["target"] = (
-            df_features["log_return"].shift(-1) > self.classification_threshold
-        ).astype(int)
-
-        train_df = df_features.dropna(subset=["target"])
-        if train_df.empty:
-            raise ValueError(
-                "Not enough data to train the model after creating lags and target."
-            )
-
-        feature_cols = [c for c in df_features.columns if "_lag" in c]
-        X_train = train_df[feature_cols].values
-        y_train = train_df["target"].to_numpy()
-
-        last_row = df_features.iloc[[-1]]
-        X_next = last_row[feature_cols].values
+        X_train, y_train, X_next = prepare_features(
+            df, self.features, self.classification_threshold
+        )
 
         clf = DecisionTreeClassifier(
             criterion=self.params["criterion"],
             max_depth=self.params["max_depth"],
-            random_state=42,
+            class_weight="balanced",
+            min_samples_leaf=20,
+            min_samples_split=40,
         )
         clf.fit(X_train, y_train)
         prob = clf.predict_proba(X_next)[0][1]
         pred = int(prob > 0.5)
 
+        return {
+            "prediction": pred,
+            "probability": prob,
+        }
+
+
+class RandomForestClassModel(BaseModel):
+    def __init__(
+        self,
+        features: list | None = None,
+        n_estimators: int = 200,
+        max_depth: int = 5,
+        criterion: str = "gini",
+        threshold: float = 0.005,
+    ):
+        features_to_init = features if features is not None else []
+
+        params = {
+            "n_estimators": n_estimators,
+            "max_depth": max_depth,
+            "criterion": criterion,
+        }
+
+        super().__init__(
+            name="RandomForestClassifier",
+            model_type="classification",
+            features=features_to_init,
+            params=params,
+            classification_threshold=threshold,
+        )
+
+    def train_predict_next(self, df: pd.DataFrame) -> dict:
+        if not self.features:
+            exclude = {"open", "high", "low", "close", "target"}
+            self.features = [c for c in df.columns if c.lower() not in exclude]
+
+        X_train, y_train, X_next = prepare_features(
+            df, self.features, self.classification_threshold
+        )
+
+        clf = RandomForestClassifier(
+            n_estimators=self.params["n_estimators"],
+            max_depth=self.params["max_depth"],
+            criterion=self.params["criterion"],
+            class_weight="balanced",
+            min_samples_leaf=5,
+        )
+        clf.fit(X_train, y_train)
+        prob = clf.predict_proba(X_next)[0][1]
+        pred = int(prob > 0.5)
+        return {
+            "prediction": pred,
+            "probability": prob,
+        }
+
+
+class XGBoostClassModel(BaseModel):
+    def __init__(
+        self,
+        features: list | None = None,
+        n_estimators: int = 100,
+        max_depth: int = 3,
+        learning_rate: float = 0.1,
+        threshold: float = 0.005,
+    ):
+        features_to_init = features if features is not None else []
+
+        params = {
+            "n_estimators": n_estimators,
+            "max_depth": max_depth,
+            "learning_rate": learning_rate,
+        }
+
+        super().__init__(
+            name="XGBoostClassifier",
+            model_type="classification",
+            features=features_to_init,
+            params=params,
+            classification_threshold=threshold,
+        )
+
+    def train_predict_next(self, df: pd.DataFrame) -> dict:
+        if not self.features:
+            exclude = {"open", "high", "low", "close", "target"}
+            self.features = [c for c in df.columns if c.lower() not in exclude]
+
+        X_train, y_train, X_next = prepare_features(
+            df, self.features, self.classification_threshold
+        )
+
+        clf = XGBClassifier(
+            n_estimators=self.params["n_estimators"],
+            max_depth=self.params["max_depth"],
+            learning_rate=self.params["learning_rate"],
+            scale_pos_weight=(y_train == 0).sum() / (y_train == 1).sum(),
+        )
+        clf.fit(X_train, y_train)
+        prob = clf.predict_proba(X_next)[0][1]
+        pred = int(prob > 0.5)
+        return {
+            "prediction": pred,
+            "probability": prob,
+        }
+
+
+class SupportVectorClassModel(BaseModel):
+    def __init__(
+        self,
+        features: list | None = None,
+        gamma: str = "scale",
+        kernel: str = "rbf",
+        C: float = 1.0,
+        threshold: float = 0.005,
+    ):
+        features_to_init = features if features is not None else []
+
+        params = {"kernel": kernel, "C": C, "gamma": gamma}
+
+        super().__init__(
+            name="SupportVectorClassifier",
+            model_type="classification",
+            features=features_to_init,
+            params=params,
+            classification_threshold=threshold,
+        )
+
+    def train_predict_next(self, df: pd.DataFrame) -> dict:
+        if not self.features:
+            exclude = {"open", "high", "low", "close", "target"}
+            self.features = [c for c in df.columns if c.lower() not in exclude]
+
+        X_train, y_train, X_next = prepare_features(
+            df, self.features, self.classification_threshold
+        )
+
+        clf = Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                (
+                    "svc",
+                    SVC(
+                        kernel=self.params["kernel"],
+                        C=self.params["C"],
+                        gamma=self.params["gamma"],
+                        probability=True,
+                        class_weight="balanced",
+                    ),
+                ),
+            ]
+        )
+        clf.fit(X_train, y_train)
+        prob = clf.predict_proba(X_next)[0][1]
+        pred = int(prob > 0.5)
         return {
             "prediction": pred,
             "probability": prob,

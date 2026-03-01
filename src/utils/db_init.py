@@ -12,8 +12,12 @@ def initialize_database():
     if not db_url:
         logger.error("DATABASE_URL not found in environment.")
         return
-
-    engine = create_engine(db_url)
+    engine = create_engine(
+        db_url,
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=10,
+    )
 
     tables = [
         # Market Data
@@ -105,22 +109,14 @@ def initialize_database():
         "CREATE INDEX IF NOT EXISTS idx_pred_reg_target_date ON predictions_regression(ticker, model, target_date);",
     ]
 
-    with engine.connect() as conn:
-        for ddl in tables:
-            try:
+    with engine.begin() as conn:
+        try:
+            for ddl in tables + indices:
                 conn.execute(text(ddl))
-                conn.commit()
-            except Exception as e:
-                logger.error(f"Error creating table: {e}")
-
-        for idx_ddl in indices:
-            try:
-                conn.execute(text(idx_ddl))
-                conn.commit()
-            except Exception as e:
-                logger.error(f"Error creating index: {e}")
-
-    logger.info("Database schema initialized.")
+            logger.info("Database schema initialized successfully.")
+        except Exception as e:
+            logger.error(f"Schema initialization failed, rolling back: {e}")
+            raise
 
 
 if __name__ == "__main__":

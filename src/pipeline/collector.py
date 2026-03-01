@@ -1,10 +1,10 @@
 import requests
+import pandas_ta as ta  # noqa: F401
 import pandas as pd
 import numpy as np
 from io import StringIO
 from typing import Union, Optional
 from finfetcher import DataFetcher
-import pandas_ta as ta
 from src.utils.logging_config import setup_logger
 
 logger = setup_logger(__name__)
@@ -35,13 +35,16 @@ def get_sp500_tickers():
     logger.info(f"Successfully retrieved {len(tickers)} tickers from Wikipedia.")
     return tickers
 
+
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or len(df) < 200:
         return df
     df.columns = [c.lower() for c in df.columns]
 
     df["log_return"] = np.log(df["close"] / df["close"].shift(1))
-    
+
+    df["volumne_rolling_mean_20"] = df["volume"].rolling(window=20).mean()
+
     df["rsi_14"] = df.ta.rsi(length=14)
     df["roc_10"] = df.ta.roc(length=10)
     df["atr_14"] = df.ta.atr(length=14)
@@ -49,8 +52,8 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
 
     macd = df.ta.macd(fast=12, slow=26, signal=9)
     if macd is not None:
-        df["macd"] = macd.iloc[:, 0]
-        df["macd_signal"] = macd.iloc[:, 2]
+        # df["macd"] = macd.iloc[:, 0]
+        # df["macd_signal"] = macd.iloc[:, 2]
         df["macd_hist"] = macd.iloc[:, 1]
 
     bb = df.ta.bbands(length=20, std=2)
@@ -65,7 +68,8 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
 
     return df.dropna()
 
-def fetch_ticker_data(ticker: str, period: str = "4y") -> Optional[pd.DataFrame]:
+
+def fetch_ticker_data(ticker: str, period: str = "7d") -> Optional[pd.DataFrame]:
     try:
         fetcher = DataFetcher(ticker)
         df = fetcher.get_data(period=period, interval="1d")
@@ -75,7 +79,7 @@ def fetch_ticker_data(ticker: str, period: str = "4y") -> Optional[pd.DataFrame]
         df = df.reset_index()
         if "index" in df.columns:
             df = df.rename(columns={"index": "date"})
-        df["date"] = pd.to_datetime(df["date"]).dt.date
+        df["date"] = pd.to_datetime(df["date"])
         column_mapping = {
             "Open": "open",
             "High": "high",
