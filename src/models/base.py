@@ -60,7 +60,7 @@ class BaseModel(ABC):
         self.params = params if params else {}
         self.classification_threshold = classification_threshold
 
-        logger.info(f"Initialized model: {self.name} of type {self.model_type}")
+        logger.debug(f"Initialized model: {self.name} of type {self.model_type}")
 
     @abstractmethod
     def train_predict_next(self, df: pd.DataFrame) -> dict:

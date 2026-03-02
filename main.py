@@ -1,7 +1,13 @@
 from src.pipeline.collector import get_sp500_tickers, fetch_ticker_data, add_features
 from src.pipeline.runner import TradingPipeline
 from src.pipeline.database import DatabaseService
-from src.models.classifiers import DecisionTreeClassModel, RandomForestClassModel
+from src.models.classifiers import (
+    DecisionTreeClassModel,
+    RandomForestClassModel,
+    XGBoostClassModel,
+    SupportVectorClassModel,
+)
+from src.models.regression import LinearRegressionModel
 from src.utils.logging_config import setup_logger
 from src.models.base import BaseModel
 
@@ -23,6 +29,9 @@ def main():
     models: list[BaseModel] = [
         DecisionTreeClassModel(max_depth=5, criterion="gini"),
         RandomForestClassModel(n_estimators=200, max_depth=5, criterion="gini"),
+        XGBoostClassModel(n_estimators=200, max_depth=5, learning_rate=0.1),
+        SupportVectorClassModel(kernel="rbf", C=1.0, gamma="scale"),
+        LinearRegressionModel(),
     ]
 
     logger.info("Fetching S&P 500 tickers...")

@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+abstract.py
 class_backtest.py
 
 dist/
