@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from sklearn.tree import DecisionTreeClassifier
-from src.models.base import BaseModel, prepare_features, create_lags
+from src.models.base import BaseModel, create_lags
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 from sklearn.svm import SVC
@@ -12,285 +12,76 @@ from src.utils.logging_config import setup_logger
 
 logger = setup_logger(__name__)
 
-class DecisionTreeClassModel(BaseModel):
+
+
+class ClassificationModel(BaseModel):
     def __init__(
         self,
-        features: list | None = None,
-        max_depth: int = 5,
-        criterion: str = "gini",
-        min_samples_leaf: int = 1,
-        min_samples_split: int = 2,
-        threshold: float = 0.005,
+        clf_class,
+        features: list,
+        classification_threshold: float = 0.005,
+        **clf_params,
     ):
-        features_to_init = features if features is not None else []
-
-        params = {
-            "max_depth": max_depth,
-            "criterion": criterion,
-            "min_samples_leaf": min_samples_leaf,
-            "min_samples_split": min_samples_split,
-        }
-
         super().__init__(
-            name="DecisionTreeClassifier",
+            name=clf_class.__name__,
             model_type="classification",
-            features=features_to_init,
-            params=params,
-            classification_threshold=threshold,
+            features=features,
+            params=clf_params,
+            classification_threshold=classification_threshold,
         )
-
-    def train_predict_next(self, df: pd.DataFrame) -> dict:
-        if not self.features:
-            exclude = {"open", "high", "low", "close", "target"}
-            self.features = [c for c in df.columns if c.lower() not in exclude]
-
-        X_train, y_train, X_next = prepare_features(
-            df, self.features, self.classification_threshold
-        )
-
-        clf = DecisionTreeClassifier(
-            criterion=self.params["criterion"],
-            max_depth=self.params["max_depth"],
-            class_weight="balanced",
-            min_samples_leaf=self.params["min_samples_leaf"],
-            min_samples_split=self.params["min_samples_split"],
-        )
-        clf.fit(X_train, y_train)
-        prob = clf.predict_proba(X_next)[0][1]
-        pred = int(prob > 0.5)
-
-        return {
-            "prediction": pred,
-            "probability": prob,
-        }
+        self.clf_class = clf_class
     
-    def fit_predict_batch(self, train_df, test_df):
-        feature_cols = [c for c in train_df.columns if c != "log_return"]
+    def get_clf(self, y_train=None):
+        params = self.params.copy()
+        if self.clf_class.__name__ in ["RandomForestClassifier", "DecisionTreeClassifier"]:
+            params["class_weight"] = "balanced"
+        if self.clf_class.__name__ == "SVC":
+            params["probability"] = True
+            params["class_weight"] = "balanced"
 
-        X_train = train_df[feature_cols].values
-        y_train = train_df["target"].values
+        if self.clf_class.__name__ == "XGBClassifier" and y_train is not None:
+            pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
+            params["scale_pos_weight"] = pos_weight
         
-        X_test = test_df[feature_cols].values
-        clf = DecisionTreeClassifier(
-            criterion=self.params["criterion"],
-            max_depth=self.params["max_depth"],
-            class_weight="balanced",
-            min_samples_leaf=self.params["min_samples_leaf"],
-            min_samples_split=self.params["min_samples_split"],
-        )
-        clf.fit(X_train, y_train)
-        return clf.predict(X_test)
-
-
-class RandomForestClassModel(BaseModel):
-    def __init__(
-        self,
-        features: list | None = None,
-        min_samples_leaf: int = 1,
-        min_samples_split: int = 2,
-        n_estimators: int = 200,
-        max_depth: int = 5,
-        criterion: str = "gini",
-        threshold: float = 0.005,
-    ):
-        features_to_init = features if features is not None else []
-
-        params = {
-            "n_estimators": n_estimators,
-            "max_depth": max_depth,
-            "criterion": criterion,
-            "min_samples_leaf": min_samples_leaf,
-            "min_samples_split": min_samples_split,
-        }
-
-        super().__init__(
-            name="RandomForestClassifier",
-            model_type="classification",
-            features=features_to_init,
-            params=params,
-            classification_threshold=threshold,
-        )
-
-    def train_predict_next(self, df: pd.DataFrame) -> dict:
-        if not self.features:
-            exclude = {"open", "high", "low", "close", "target"}
-            self.features = [c for c in df.columns if c.lower() not in exclude]
-
-        X_train, y_train, X_next = prepare_features(
-            df, self.features, self.classification_threshold
-        )
-
-        clf = RandomForestClassifier(
-            n_estimators=self.params["n_estimators"],
-            max_depth=self.params["max_depth"],
-            criterion=self.params["criterion"],
-            class_weight="balanced",
-            min_samples_leaf=self.params["min_samples_leaf"],
-            min_samples_split=self.params["min_samples_split"],
-        )
-        clf.fit(X_train, y_train)
-        prob = clf.predict_proba(X_next)[0][1]
-        pred = int(prob > 0.5)
-        return {
-            "prediction": pred,
-            "probability": prob,
-        }
-    def fit_predict_batch(self, train_df, test_df):
-        feature_cols = [c for c in train_df.columns if c != "log_return"]
-
-        X_train = train_df[feature_cols].values
-        y_train = train_df["target"].values
+        clf = self.clf_class(**params)
         
-        X_test = test_df[feature_cols].values
-        clf = RandomForestClassifier(
-            n_estimators=self.params["n_estimators"],
-            max_depth=self.params["max_depth"],
-            criterion=self.params["criterion"],
-            class_weight="balanced",
-            min_samples_leaf=self.params["min_samples_leaf"],
-            min_samples_split=self.params["min_samples_split"],
-        )
-        clf.fit(X_train, y_train)
-        return clf.predict(X_test)
-
-
-class XGBoostClassModel(BaseModel):
-    def __init__(
-        self,
-        features: list | None = None,
-        n_estimators: int = 100,
-        max_depth: int = 3,
-        learning_rate: float = 0.1,
-        threshold: float = 0.005,
-    ):
-        features_to_init = features if features is not None else []
-
-        params = {
-            "n_estimators": n_estimators,
-            "max_depth": max_depth,
-            "learning_rate": learning_rate,
-        }
-
-        super().__init__(
-            name="XGBoostClassifier",
-            model_type="classification",
-            features=features_to_init,
-            params=params,
-            classification_threshold=threshold,
-        )
-
-    def train_predict_next(self, df: pd.DataFrame) -> dict:
-        if not self.features:
-            exclude = {"open", "high", "low", "close", "target"}
-            self.features = [c for c in df.columns if c.lower() not in exclude]
-
-        X_train, y_train, X_next = prepare_features(
-            df, self.features, self.classification_threshold
-        )
-
-        clf = XGBClassifier(
-            n_estimators=self.params["n_estimators"],
-            max_depth=self.params["max_depth"],
-            learning_rate=self.params["learning_rate"],
-            scale_pos_weight=(y_train == 0).sum() / (y_train == 1).sum(),
-        )
-        clf.fit(X_train, y_train)
-        prob = clf.predict_proba(X_next)[0][1]
-        pred = int(prob > 0.5)
-        return {
-            "prediction": pred,
-            "probability": prob,
-        }
-    def fit_predict_batch(self, train_df, test_df):
-        feature_cols = [c for c in train_df.columns if c != "log_return"]
-        X_train = train_df[feature_cols].values
-        y_train = train_df["target"].values
+        if self.clf_class.__name__ in ["SVC", "LogisticRegression"]:
+            return Pipeline([("scaler", StandardScaler()), ("clf", clf)])
+        return clf
         
-        X_test = test_df[feature_cols].values
-        clf = XGBClassifier(
-            n_estimators=self.params["n_estimators"],
-            max_depth=self.params["max_depth"],
-            learning_rate=self.params["learning_rate"],
-            scale_pos_weight=(y_train == 0).sum() / (y_train == 1).sum(),
-            tree_method="hist",
-            device="cuda",
-        )
-        clf.fit(X_train, y_train)
-        return clf.predict(X_test)
-
-
-class SupportVectorClassModel(BaseModel):
-    def __init__(
-        self,
-        features: list | None = None,
-        gamma: str = "scale",
-        kernel: str = "rbf",
-        C: float = 1.0,
-        threshold: float = 0.005,
-    ):
-        features_to_init = features if features is not None else []
-
-        params = {"kernel": kernel, "C": C, "gamma": gamma}
-
-        super().__init__(
-            name="SupportVectorClassifier",
-            model_type="classification",
-            features=features_to_init,
-            params=params,
-            classification_threshold=threshold,
-        )
-
-    def train_predict_next(self, df: pd.DataFrame) -> dict:
-        if not self.features:
-            exclude = {"open", "high", "low", "close", "target"}
-            self.features = [c for c in df.columns if c.lower() not in exclude]
-
-        X_train, y_train, X_next = prepare_features(
-            df, self.features, self.classification_threshold
-        )
-
-        clf = Pipeline(
-            [
-                ("scaler", StandardScaler()),
-                (
-                    "svc",
-                    SVC(
-                        kernel=self.params["kernel"],
-                        C=self.params["C"],
-                        gamma=self.params["gamma"],
-                        probability=True,
-                        class_weight="balanced",
-                    ),
-                ),
+    def _prepare_features(self, df: pd.DataFrame):
+            df_work = df.copy()
+            lags = 3
+            df_features = create_lags(self.features, df_work, lags=lags)
+            
+            feature_cols_lag = [c for c in df_features.columns if "_lag" in c]
+            feature_cols_current = [
+                c for c in df_features.columns 
+                if c in self.features and c not in ["log_return", "target"]
             ]
-        )
-        clf.fit(X_train, y_train)
-        prob = clf.predict_proba(X_next)[0][1]
-        pred = int(prob > 0.5)
-        return {
-            "prediction": pred,
-            "probability": prob,
-        }
-    def fit_predict_batch(self, train_df, test_df):
-        feature_cols = [c for c in train_df.columns if c != "log_return"]
+            feature_cols = feature_cols_current + feature_cols_lag
+            return df_features, feature_cols
+
+    def train_predict_next(self, df: pd.DataFrame) -> dict:
+        df_prep, feature_cols = self._prepare_features(df)
+        
+        df_prep["target"] = (
+            df_prep["log_return"].shift(-1) > self.classification_threshold
+        ).astype(int)
+
+        train_df = df_prep.iloc[:-1].dropna(subset=["target"] + feature_cols)
+
         X_train = train_df[feature_cols].values
         y_train = train_df["target"].values
         
-        X_test = test_df[feature_cols].values
-        clf = Pipeline(
-            [
-                ("scaler", StandardScaler()),
-                (
-                    "svc",
-                    SVC(
-                        kernel=self.params["kernel"],
-                        C=self.params["C"],
-                        gamma=self.params["gamma"],
-                        probability=True,
-                        class_weight="balanced",
-                    ),
-                ),
-            ]
-        )
+        X_next = df_prep[feature_cols].iloc[[-1]].values
+
+        
+        clf = self.get_clf(y_train)
         clf.fit(X_train, y_train)
-        return clf.predict(X_test)
+        
+        prob = clf.predict_proba(X_next)[0][1]
+        return {
+            "prediction": int(prob > 0.5),
+            "probability": prob,
+        }

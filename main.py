@@ -1,13 +1,13 @@
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from sklearn.svm import SVC
+from sklearn.linear_model import LinearRegression
+
 from src.pipeline.collector import get_sp500_tickers, fetch_ticker_data, add_features
 from src.pipeline.runner import TradingPipeline
 from src.pipeline.database import DatabaseService
-from src.models.classifiers import (
-    DecisionTreeClassModel,
-    RandomForestClassModel,
-    XGBoostClassModel,
-    SupportVectorClassModel,
-)
-from src.models.regression import LinearRegressionModel
+from src.models.classifiers import ClassificationModel
 from src.utils.logging_config import setup_logger
 from src.models.base import BaseModel
 
@@ -25,13 +25,13 @@ def main():
         return
 
     pipeline = TradingPipeline(db_service=db_service)
-
+    features = ["close", "rsi_14", "roc_10", "volume", "macd_hist", "bb_percent", "dist_ema_200", "volume_rolling_mean_20", "atr_14", "mfi_14"]
     models: list[BaseModel] = [
-        DecisionTreeClassModel(max_depth=5, criterion="gini"),
-        RandomForestClassModel(n_estimators=200, max_depth=5, criterion="gini"),
-        XGBoostClassModel(n_estimators=200, max_depth=5, learning_rate=0.1),
-        SupportVectorClassModel(kernel="rbf", C=1.0, gamma="scale"),
-        LinearRegressionModel(),
+        ClassificationModel(DecisionTreeClassifier, features=features, max_depth=5, criterion="gini"),
+        ClassificationModel(RandomForestClassifier, features=features, n_estimators=200, max_depth=5, criterion="gini"),
+        ClassificationModel(XGBClassifier, features=features, n_estimators=200, max_depth=5, learning_rate=0.1),
+        ClassificationModel(SVC, features=features, kernel="rbf", C=1.0, gamma="scale"),
+        #ClassificationModel(LinearRegressionModel, features=["open", "high", "low", "close", "volume"]),
     ]
 
     logger.info("Fetching S&P 500 tickers...")

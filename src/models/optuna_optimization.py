@@ -6,15 +6,12 @@ import optuna
 from dotenv import load_dotenv
 from typing import Callable
 from sklearn.metrics import f1_score
+from functools import partial
+from joblib import Parallel, delayed
 
 from src.pipeline.collector import get_sp500_tickers, add_features
 from src.pipeline.database import DatabaseService
-from src.models.classifiers import (
-    DecisionTreeClassModel,
-    RandomForestClassModel,
-    XGBoostClassModel,
-    SupportVectorClassModel,
-)
+from src.models.classifiers import ClassificationModel
 from src.models.base import create_lags
 
 from src.utils.logging_config import setup_logger
@@ -25,6 +22,26 @@ load_dotenv()
 
 db_url = os.getenv("OPTUNA_DB")
 
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from sklearn.svm import SVC
+
+features = ["close", "rsi_14", "roc_10", "volume", "macd_hist", "bb_percent", "dist_ema_200", "volume_rolling_mean_20", "atr_14", "mfi_14"]
+
+THRESHOLD = 0.005
+
+def DecisionTreeClassModel(**params):
+    return ClassificationModel(DecisionTreeClassifier, features, THRESHOLD, **params)
+
+def RandomForestClassModel(**params):
+    return ClassificationModel(RandomForestClassifier, features, THRESHOLD, **params)
+
+def XGBoostClassModel(**params):
+    return ClassificationModel(XGBClassifier, features, THRESHOLD, **params)
+
+def SupportVectorClassModel(**params):
+    return ClassificationModel(SVC, features, THRESHOLD, **params)
 
 MODELS = {
     "DecisionTreeClassModel": DecisionTreeClassModel,
@@ -32,7 +49,7 @@ MODELS = {
     "XGBoostClassModel": XGBoostClassModel,
     "SupportVectorClassModel": SupportVectorClassModel,
 }
-THRESHOLD = 0.005
+
 
 
 def get_search_space(trial: optuna.Trial, model_name: str) -> dict:
@@ -72,52 +89,61 @@ def walk_forward_score(
     train_window: int = 252,
     n_splits: int = 5,
 ) -> float:
-    n = len(df)
-    test_size = (n - train_window) // n_splits
+    model = model_factory()
+
+    df_prep, feature_cols = model._prepare_features(df)
+
     
+    df_prep["target"] = (df_prep["log_return"].shift(-1) > threshold).astype(int)
+    df_prep = df_prep.dropna(subset=["target"] + feature_cols)
+
+    n = len(df_prep)
+    test_size = (n - train_window) // n_splits
+
     if test_size < 20:
         return -999.0
 
     scores = []
 
     for i in range(n_splits):
-        train_start = i * test_size
-        train_end = train_start + train_window
+        train_end = train_window + i * test_size
         test_end = min(train_end + test_size, n)
 
-        train_slice = df.iloc[train_start:train_end].copy()
-        test_slice = df.iloc[train_end:test_end].copy()
+        train_slice = df_prep.iloc[:train_end]
+        test_slice = df_prep.iloc[train_end:test_end]
 
         if len(test_slice) == 0:
             break
 
+
+        X_train = train_slice[feature_cols].values
+        y_train = train_slice["target"].values
+        
+        X_test = test_slice[feature_cols].values
+        y_test = test_slice["target"].values
+        clf = model.get_clf(y_train)
+        
         try:
-            model = model_factory()
-            model.classification_threshold = threshold
-            
-            y_pred = model.fit_predict_batch(train_slice, test_slice)
-            
-            y_true = (test_slice["log_return"] > threshold).astype(int).values
-            
-            if len(y_true) > 0:
-                score = f1_score(y_true, y_pred, zero_division=0) # type: ignore
-                scores.append(score)
-                
+            clf.fit(X_train, y_train)
+            preds = clf.predict(X_test)
+            score = f1_score(y_test, preds, zero_division=0)
+            scores.append(score)
         except Exception as e:
-            print(f"Error v foldu {i}: {e}")
-            continue
+            logger.error(f"Training failed on split {i}: {e}")
+            return -999.0
 
     return float(np.mean(scores)) if scores else -999.0
 
 def objective(
     trial: optuna.Trial,
+    *,
     model_name: str,
     df: pd.DataFrame,
     model_factory: Callable,
     threshold: float,
 ) -> float:
-    paraams = get_search_space(trial, model_name)
-    factory = lambda: model_factory(**paraams)
+    params = get_search_space(trial, model_name)
+    factory = partial(model_factory, **params)
     return walk_forward_score(df, factory, threshold)
 
 
@@ -132,33 +158,32 @@ def load_data(ticker: str) -> pd.DataFrame:
 
     df_work.index = pd.to_datetime(df_work.index)
     df = add_features(df_work)
-    df = create_lags(list(df.columns), df, lags=3)
-
-    df["target"] = (df["log_return"].shift(-1) > THRESHOLD).astype(int)
-
-
-    df = df.iloc[:-1600]
     return df.dropna()
 
 
+
+def optimize_ticker(ticker, model_name, factory_fn):
+    df = load_data(ticker)
+    study = optuna.create_study(
+        direction="maximize",
+        storage=db_url,
+        study_name=f"v2_{ticker}_{model_name}",
+        load_if_exists=True,
+    )
+    study.optimize(
+        partial(objective, model_name=model_name, df=df,
+                model_factory=factory_fn, threshold=THRESHOLD),
+        n_trials=50,
+        n_jobs=1,
+    )
+
 def main():
     tickers = get_sp500_tickers()
-
     for model_name, factory_fn in MODELS.items():
-        for ticker in tickers:
-            df = load_data(ticker)
-            study = optuna.create_study(
-                direction="maximize",
-                storage=db_url,
-                study_name=f"v2_{ticker}_{model_name}",
-                load_if_exists=True,
-            )
-            study.optimize(
-                lambda trial, m=model_name,f=factory_fn: objective(
-                    trial, m, df, f, THRESHOLD
-                ),
-                n_trials=50,
-                n_jobs=-1
-            )
+        Parallel(n_jobs=1)(
+            delayed(optimize_ticker)(ticker, model_name, factory_fn)
+            for ticker in tickers
+        )
+
 if __name__ == "__main__":
     main()
