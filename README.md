@@ -84,14 +84,6 @@ The pipeline will:
 4. Evaluate any pending predictions from previous days.
 5. Generate and save new predictions for the next trading day.
 
-## Deployment on GitHub
-
-1. Push the code to your GitHub repository.
-2. Go to **Settings > Secrets and variables > Actions**.
-3. Add a new repository secret:
-   - `DATABASE_URL`: Your production PostgreSQL connection string.
-4. The pipeline will now run automatically every day at midnight UTC. You can also trigger it manually from the **Actions** tab.
-
 ## License
 
 MIT
